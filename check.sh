@@ -194,11 +194,11 @@ check_sudoers() {
     else
         log_fail "Helper ownership or permissions are unsafe"
     fi
-    if ! sudo -n test -f "${SUDOERS_FILE}" 2>/dev/null; then
-        log_warn "Could not inspect sudoers policy without sudo authentication"
+    if ! sudo -v || ! sudo test -f "${SUDOERS_FILE}"; then
+        log_warn "Could not inspect sudoers policy; authenticate with sudo to check it"
         return
     fi
-    if sudo -n grep -Fq 'NOPASSWD: /usr/local/libexec/ii-sddm-theme-sync ""' "${SUDOERS_FILE}"; then
+    if sudo grep -Fq 'NOPASSWD: /usr/local/libexec/ii-sddm-theme-sync ""' "${SUDOERS_FILE}"; then
         log_ok "sudoers allows only the fixed helper without arguments"
     else
         log_fail "sudoers policy does not match the restricted helper"

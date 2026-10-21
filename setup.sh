@@ -516,7 +516,7 @@ setup_sudoers() {
         if [[ ! -d "${parent}" ]]; then
             sudo install -d -o root -g root -m 0755 "${parent}"
         fi
-        if [[ "$(stat -c '%u' "${parent}")" != "0" ]] || [[ -n "$(find "${parent}" -maxdepth 0 -perm /022 -print)" ]]; then
+        if [[ -L "${parent}" ]] || [[ "$(stat -c '%u' "${parent}")" != "0" ]] || [[ -n "$(find "${parent}" -maxdepth 0 -perm /022 -print)" ]]; then
             log_error "Unsafe executable parent directory: ${parent}"
             return 1
         fi

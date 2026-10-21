@@ -4,7 +4,7 @@ set -euo pipefail
 # === CONFIGURATION ===
 
 readonly THEME_NAME="ii-sddm-theme"
-readonly THEME_REPO="https://github.com/3d3f/ii-sddm-theme"
+readonly THEME_REPO="https://github.com/tovakai/ii-sddm-theme"
 
 readonly SDDM_THEMES_DIR="/usr/share/sddm/themes"
 readonly SDDM_THEME_DEST="${SDDM_THEMES_DIR}/${THEME_NAME}"
@@ -274,18 +274,22 @@ install_deps() {
     log_ok "Dependencies installed successfully"
 }
 
-# === REPO CLONING ===
+# === REPO SOURCE ===
 
 clone_repo_to_temp() {
-    log_step "Cloning repository to temporary directory"
-
-    log_info "Cloning ${THEME_REPO} into temporary directory ${CLONE_DIR}..."
-    if ! git clone --depth 1 "${THEME_REPO}" "${CLONE_DIR}"; then
-        log_error "Failed to clone theme repository. Please check your internet connection and the repository URL."
-        exit 1
+    log_step "Preparing repository files"
+    local script_dir
+    script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "${script_dir}/Main.qml" && -f "${script_dir}/secure-sync/ii-sddm-theme-sync" ]]; then
+        log_info "Using this local checkout (including branch changes)."
+        mkdir -p "${CLONE_DIR}"
+        cp -a "${script_dir}/." "${CLONE_DIR}/"
+    else
+        log_info "Cloning ${THEME_REPO}..."
+        git clone --depth 1 "${THEME_REPO}" "${CLONE_DIR}"
     fi
-    log_ok "Theme repository cloned successfully to ${CLONE_DIR}."
 }
+
 
 # === COPY SPECIFIC FILES TO HYPR SCRIPTS ===
 
@@ -328,6 +332,9 @@ copy_specific_files_to_hypr() {
         return 1
     fi
 
+    # Always replace the old privileged, user-writable apply script.
+    cp "${CLONE_DIR}/secure-sync/sddm-theme-apply.sh" "${APPLY_SCRIPT}"
+    cp "${CLONE_DIR}/secure-sync/prepare-video.py" "${HYPR_THEME_SCRIPTS_DEST}/prepare-video.py"
     if [[ -f "${APPLY_SCRIPT}" ]]; then
         chmod +x "${APPLY_SCRIPT}"
         log_ok "Made ${APPLY_SCRIPT} executable."
@@ -378,14 +385,40 @@ EOF
     log_ok "SDDM configuration written to ${SDDM_THEME_CONF}"
 }
 
-# === ENABLE SDDM ===
+# === ENABLE SDDM (NEVER SILENTLY REPLACE AN EXISTING DISPLAY MANAGER) ===
 
 enable_sddm() {
-    log_step "Enabling SDDM"
-    sudo systemctl disable display-manager.service 2>/dev/null || true
-    sudo systemctl enable sddm.service
-    log_ok "SDDM enabled. It will start on next boot."
+    log_step "Display manager activation"
+    local active="" unit=""
+    if [[ -e /etc/systemd/system/display-manager.service ]]; then
+        active="$(readlink -f /etc/systemd/system/display-manager.service)"
+        unit="$(basename "${active}")"
+    fi
+    if [[ "${unit}" == "sddm.service" ]]; then
+        log_ok "SDDM is already the configured display manager."
+        return 0
+    fi
+    if [[ -n "${unit}" ]]; then
+        log_warn "Existing display manager: ${unit}. It will NOT be changed without permission."
+        printf 'To change to SDDM, type SWITCH (anything else keeps %s): ' "${unit}"
+        read -r decision
+        if [[ "${decision}" != "SWITCH" ]]; then
+            log_warn "Kept ${unit}; SDDM theme is installed but not active."
+            return 0
+        fi
+        log_warn "Rollback: sudo systemctl disable sddm.service && sudo systemctl enable ${unit}"
+        sudo systemctl disable "${unit}"
+        sudo systemctl enable sddm.service
+    else
+        read -r -p "No active display manager found. Enable SDDM at boot? [y/N]: " decision
+        if [[ "${decision}" == "y" || "${decision}" == "Y" ]]; then
+            sudo systemctl enable sddm.service
+        else
+            log_warn "SDDM was not enabled."
+        fi
+    fi
 }
+
 
 # === MATUGEN CONFIGURATION ===
 
@@ -414,13 +447,13 @@ configure_matugen() {
             log_error "Apply script ${APPLY_SCRIPT} not found for ii-matugen integration. Skipping Matugen post-hook configuration."
             return 1
         fi
-        post_hook_command="python3 ~/.config/${THEME_NAME}/generate_settings.py && sudo ~/.config/${THEME_NAME}/sddm-theme-apply.sh &"
+        post_hook_command="python3 ~/.config/${THEME_NAME}/generate_settings.py && ~/.config/${THEME_NAME}/sddm-theme-apply.sh"
     elif [[ "${INSTALLATION_TYPE}" == "matugen-only" ]]; then
         if [[ ! -f "${APPLY_SCRIPT}" ]]; then
             log_error "Apply script ${APPLY_SCRIPT} not found for Matugen-only integration. Skipping Matugen post-hook configuration."
             return 1
         fi
-        post_hook_command="sudo ~/.config/${THEME_NAME}/sddm-theme-apply.sh &"
+        post_hook_command="~/.config/${THEME_NAME}/sddm-theme-apply.sh"
     fi
 
     # Remove existing [templates.iisddmtheme] block
@@ -466,40 +499,38 @@ EOF
     return 0
 }
 
-# === SUDOERS CONFIGURATION ===
+# === RESTRICTED, ROOT-OWNED SYNC HELPER ===
 
 setup_sudoers() {
-    log_step "Configuring sudoers for passwordless execution"
-    if [[ ! -f "${APPLY_SCRIPT}" ]]; then
-        log_warn "Apply script not found at expected path (${APPLY_SCRIPT}). Sudoers configuration cannot proceed."
-        return 0
-    fi
+    log_step "Installing restricted synchronization helper"
+    readonly HELPER_SOURCE="${CLONE_DIR}/secure-sync/ii-sddm-theme-sync"
+    readonly HELPER_DEST="/usr/local/libexec/ii-sddm-theme-sync"
 
-    local sudoers_rule="${USERNAME} ALL=(ALL) NOPASSWD: ${APPLY_SCRIPT}"
-    local temp_file
-    temp_file=$(mktemp)
-
-    printf '%s\n' "${sudoers_rule}" >"${temp_file}"
-
-    if ! visudo -c -f "${temp_file}" >/dev/null 2>&1; then
-        log_error "Invalid sudoers rule generated. Aborting sudoers configuration."
-        rm -f "${temp_file}"
+    if [[ ! -f "${HELPER_SOURCE}" ]]; then
+        log_error "Missing safe sync helper. Refusing to set up passwordless sudo."
         return 1
     fi
-
-    sudo cp "${temp_file}" "${SUDOERS_FILE}"
-    sudo chmod 0440 "${SUDOERS_FILE}"
+    sudo install -D -o root -g root -m 0755 "${HELPER_SOURCE}" "${HELPER_DEST}"
+    local temp_file
+    temp_file="$(mktemp)"
+    # The literal "" in sudoers means NO arguments are permitted.
+    printf '%s ALL=(root) NOPASSWD: %s ""\n' "${USERNAME}" "${HELPER_DEST}" > "${temp_file}"
+    if ! visudo -c -f "${temp_file}" >/dev/null 2>&1; then
+        rm -f "${temp_file}"
+        log_error "Generated sudoers policy is invalid."
+        return 1
+    fi
+    sudo install -D -o root -g root -m 0440 "${temp_file}" "${SUDOERS_FILE}"
     rm -f "${temp_file}"
-
-    log_ok "Sudoers configured: ${USERNAME} can run ${APPLY_SCRIPT} without password."
+    log_ok "Only ${HELPER_DEST} (without arguments) can run passwordlessly."
 }
+
 
 # === MAIN ===
 
 main() {
     introduction
     check_requirements
-    get_aur_helper
     check_git
     check_sddm_installation
 
@@ -510,15 +541,15 @@ main() {
     install_deps
     install_theme
 
-    configure_sddm
-    enable_sddm
-
     copy_specific_files_to_hypr
+    setup_sudoers
+
+    # Apply and validate assets before activating the login theme.
+    # Keep any current display manager untouched until the end.
+
 
     if [[ "${INSTALLATION_TYPE}" == "ii-matugen" || "${INSTALLATION_TYPE}" == "matugen-only" ]]; then
         configure_matugen
-        setup_sudoers
-
         log_step "Applying SDDM theme"
         if [[ -f "${APPLY_SCRIPT}" ]]; then
             if [[ "${INSTALLATION_TYPE}" == "ii-matugen" ]]; then
@@ -527,10 +558,11 @@ main() {
                 fi
             fi
 
-            if sudo bash "${APPLY_SCRIPT}" >/dev/null 2>&1 || true; then
+            if "${APPLY_SCRIPT}"; then
                 log_ok "Theme applied."
             else
-                log_warn "Failed to apply theme automatically. Run manually: sudo ${APPLY_SCRIPT}"
+                log_error "Theme sync failed. Resolve the error before activating the login theme."
+                return 1
             fi
         else
             log_warn "Apply script not found at ${APPLY_SCRIPT}. Theme will be applied on next Matugen run."
@@ -539,16 +571,20 @@ main() {
     elif [[ "${INSTALLATION_TYPE}" == "no-matugen" ]]; then
         log_step "Applying SDDM theme"
         if [[ -f "${APPLY_SCRIPT}" ]]; then
-            if sudo bash "${APPLY_SCRIPT}" >/dev/null 2>&1 || true; then
+            if "${APPLY_SCRIPT}"; then
                 log_ok "Theme applied."
             else
-                log_warn "Failed to apply theme automatically. Run manually: sudo ${APPLY_SCRIPT}"
+                log_error "Theme sync failed. Resolve the error before activating the login theme."
+                return 1
             fi
         else
             log_warn "Apply script not found at ${APPLY_SCRIPT}. Theme application skipped."
         fi
     fi
     
+    configure_sddm
+    enable_sddm
+
     local msg=" Installation completed successfully "
     local width=${#msg}
     local border

@@ -17,6 +17,7 @@ readonly USERNAME="${USER}"
 readonly SUDOERS_FILE="/etc/sudoers.d/sddm-theme-${USERNAME}"
 
 readonly FONTS_DIR="/usr/share/fonts/ii-sddm-theme-fonts"
+readonly SYNC_HELPER="/usr/local/libexec/ii-sddm-theme-sync"
 
 # === COLORS ===
 
@@ -68,7 +69,7 @@ introduction() {
     printf "This script will remove the ii-sddm-theme and all its components.\n"
     printf "\n"
     printf "  ${STY_YELLOW}Note:${STY_RST} This will remove the theme, SDDM configuration, scripts,\n"
-    printf "        fonts, matugen block, and sudoers rule.\n"
+    printf "        fonts, matugen block, sudoers rule, and sync helper.\n"
     printf "\n"
     read -r -p "===> Continue? [y/n]: " p
     case $p in
@@ -190,6 +191,10 @@ main() {
     remove_fonts
     remove_matugen_conf
     remove_sudoers
+    if sudo test -f "${SYNC_HELPER}"; then
+        sudo rm -f "${SYNC_HELPER}"
+        log_ok "Removed restricted sync helper"
+    fi
 
     local msg=" Uninstallation completed successfully "
     local width=${#msg}

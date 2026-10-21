@@ -267,7 +267,7 @@ detect_configs_and_select_installation_type() {
 install_deps() {
     log_step "Installing dependencies"
     log_info "Installing official Arch repositories packages..."
-    sudo pacman -S --needed sddm qt6-svg qt6-virtualkeyboard qt6-multimedia-ffmpeg
+    sudo pacman -S --needed python sddm qt6-svg qt6-virtualkeyboard qt6-multimedia-ffmpeg
 
     install_fonts
 

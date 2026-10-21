@@ -297,9 +297,10 @@ copy_specific_files_to_hypr() {
     log_step "Copying specific files to Hyprland custom scripts (${HYPR_THEME_SCRIPTS_DEST})"
 
     if [[ -d "${HYPR_THEME_SCRIPTS_DEST}" ]]; then
-        log_warn "Existing theme scripts directory found at ${HYPR_THEME_SCRIPTS_DEST}. Removing it before copying new files."
-        rm -rf "${HYPR_THEME_SCRIPTS_DEST}"
-        log_ok "Old theme scripts directory removed."
+        local backup="${HYPR_THEME_SCRIPTS_DEST}.backup-$(date +%Y%m%d-%H%M%S)-$"
+        log_warn "Existing user configuration detected. Moving it to ${backup}"
+        mv -- "${HYPR_THEME_SCRIPTS_DEST}" "${backup}"
+        log_ok "Previous customization backup saved."
     fi
 
     mkdir -p "${HYPR_THEME_SCRIPTS_DEST}"
@@ -554,7 +555,8 @@ main() {
         if [[ -f "${APPLY_SCRIPT}" ]]; then
             if [[ "${INSTALLATION_TYPE}" == "ii-matugen" ]]; then
                 if ! python3 "${MATUGEN_GENERATE_SETTINGS_SCRIPT}" > /dev/null 2>&1; then
-                    log_warn "generate_settings.py failed. Theme application might be incomplete."
+                    log_error "generate_settings.py failed. Aborting before enabling the theme."
+                    return 1
                 fi
             fi
 
@@ -565,7 +567,8 @@ main() {
                 return 1
             fi
         else
-            log_warn "Apply script not found at ${APPLY_SCRIPT}. Theme will be applied on next Matugen run."
+            log_error "Apply script not found at ${APPLY_SCRIPT}."
+            return 1
         fi
 
     elif [[ "${INSTALLATION_TYPE}" == "no-matugen" ]]; then
@@ -578,7 +581,8 @@ main() {
                 return 1
             fi
         else
-            log_warn "Apply script not found at ${APPLY_SCRIPT}. Theme application skipped."
+            log_error "Apply script not found at ${APPLY_SCRIPT}."
+            return 1
         fi
     fi
     

@@ -4,7 +4,7 @@ https://github.com/user-attachments/assets/a03e1628-3438-4390-bb62-96e18308a8e0
 
 ## Overview
 
-[ii-sddm-theme](https://github.com/3d3f/ii-sddm-theme) is a custom theme for the [SDDM](https://github.com/sddm/sddm/) display manager that tries to replicate the lockscreen aesthetic and settings of [illogical impulse](https://github.com/end-4/dots-hyprland). It can be used with ii dotfiles, with [Matugen](https://github.com/InioX/matugen) only, or as a standalone theme.
+[ii-sddm-theme](https://github.com/tovakai/ii-sddm-theme) is a custom theme for the [SDDM](https://github.com/sddm/sddm/) display manager that tries to replicate the lockscreen aesthetic and settings of [illogical impulse](https://github.com/end-4/dots-hyprland). It can be used with ii dotfiles, with [Matugen](https://github.com/InioX/matugen) only, or as a standalone theme.
 
 I only have a basic understanding of Qt QML, so this project is a learning experience and mostly about piecing together code from various sources while figuring things out along the way. I also get a ton of help from ai models.
 
@@ -54,33 +54,59 @@ Manually configure your background, colors, and settings
 
 ## Installation
 
-### Install Script
+### Install from this fork
 
-The script will detect your configuration and guide you through the installation:
+Read the script before running it. Run it as your regular user, **not** with `sudo bash`:
 
-```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/3d3f/ii-sddm-theme/main/setup.sh)"
+```bash
+git clone https://github.com/tovakai/ii-sddm-theme.git
+cd ii-sddm-theme
+bash ./setup.sh
 ```
 
-It can also be used to update the theme.
+The installer uses the **current local checkout**, including any checked-out fix branch. When run without a local checkout, it clones this fork rather than the upstream repository.
 
-> **Note:** Only Arch Linux + Hyprland is supported. Non-standard folder structures will require manual installation. 
+The installer installs SDDM and its dependencies on Arch, but **does not silently change your display manager**. If another manager is active, you must type `SWITCH` to replace it. The installer prints how to restore the previous manager. Before rebooting, preview the greeter:
+
+```bash
+sddm-greeter-qt6 --test-mode --theme /usr/share/sddm/themes/ii-sddm-theme
+```
+
+### Automatic synchronization and security
+
+For `ii + Matugen` and `Matugen-only` modes, the Matugen post-hook runs the settings generator (when applicable) and a normal-user wrapper at:
+
+```bash
+~/.config/ii-sddm-theme/sddm-theme-apply.sh
+```
+
+You can run the wrapper manually after editing the SDDM settings or changing a wallpaper. Do **not** run it with sudo.
+
+The original upstream installer allowed passwordless root execution of that user-writable script. This fork removes that rule. Instead:
+
+- A small Python synchronization helper is installed as **root-owned** `/usr/local/libexec/ii-sddm-theme-sync`.
+- Sudoers permits that **exact program, with no arguments**, for the installing user. The wrapper uses `sudo -n` so background hooks never hang on a password prompt.
+- The helper does not run shell commands or user-provided scripts. It copies only caller-owned regular files into fixed locations inside the root-owned SDDM theme. It checks source size/ownership and destination directory permissions, and uses atomic replacements.
+- Video wallpaper thumbnails are produced by FFmpeg **as your regular user**, not root.
+- The installer reports sync errors instead of claiming success and overwrites the legacy unsafe sudoers rule during upgrades.
+
+**Security boundary:** SDDM loads the generated QML in its greeter. Anyone who can modify those assets may affect the login UI, even without root access. This integration is intended for a trusted single-user desktop; don't allow untrusted users to write the synchronized QML. The wallpaper file must be owned by the installing user (copy system-owned wallpapers into your home directory first). The helper currently caps wallpapers at 512 MiB.
+
+### Post-installation
+
+Consult `~/.config/ii-sddm-theme/GUIDE.TXT` for the selected mode. Run `bash ./check.sh` to check the installation.
+
+### Uninstallation
+
+From a local checkout, as your regular user:
+
+```bash
+bash ./uninstall.sh
+```
+
+This removes the theme, configuration, fonts, Matugen integration, sudoers rule, and fixed helper. It does **not** automatically switch your display manager back; consult the rollback command printed during setup. A reboot may be necessary.
 
 ---
-
-## Post-Installation
-
-After installation, check the `GUIDE.txt` file in your `~/.config/ii-sddm-theme/` folder.
-
-## Uninstallation
-
-Run the uninstall script:
-
-```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/3d3f/ii-sddm-theme/main/uninstall.sh)"
-```
-
-This will remove the SDDM theme, configuration, scripts, fonts, Matugen block, and sudoers rule. A reboot is required to fully apply the changes.
 
 ## Cursor theme
 This example is made with [Bibata Modern Classic](https://github.com/ful1e5/Bibata_Cursor), but you can use any cursor theme.
@@ -106,4 +132,4 @@ Inherits=Bibata-Modern-Classic
 
 ## Issues & Questions
 
-For bug reports, questions, or feature requests, please [open an issue](https://github.com/3d3f/ii-sddm-theme/issues/new/choose).
+For issues with this fork, please [open an issue](https://github.com/tovakai/ii-sddm-theme/issues).

@@ -1,0 +1,153 @@
+#!/usr/bin/python3 -I
+"""Narrowly scoped, root-owned ii-sddm-theme asset copier.
+
+This is the ONLY program permitted by the passwordless sudo rule.
+It accepts no arguments, never invokes a shell or external command, and
+never treats user-controlled paths as destinations.
+"""
+import os
+import pwd
+import re
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+DEST = Path("/usr/share/sddm/themes/ii-sddm-theme")
+MAX_CONFIG_BYTES = 2 * 1024 * 1024
+MAX_WALLPAPER_BYTES = 512 * 1024 * 1024
+EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif", "avi", "mp4", "mov", "mkv", "m4v", "webm"}
+VIDEOS = {"avi", "mp4", "mov", "mkv", "m4v", "webm"}
+
+
+def fail(message):
+    raise RuntimeError(message)
+
+
+def caller():
+    if os.geteuid() != 0:
+        fail("Sync helper must be called using sudo.")
+    try:
+        uid = int(os.environ["SUDO_UID"])
+        user = pwd.getpwuid(uid)
+    except (KeyError, ValueError) as exc:
+        fail(f"Missing valid sudo caller identity: {exc}")
+    if uid == 0 or user.pw_uid != uid:
+        fail("Refusing a root or invalid sudo caller.")
+    return uid, Path(user.pw_dir)
+
+
+def read_owned(path, uid, limit, nofollow=True):
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    if nofollow:
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
+            fail(f"Expected caller-owned regular file: {path}")
+        if info.st_size > limit:
+            fail(f"Source file too large: {path}")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            contents = handle.read(limit + 1)
+        if len(contents) > limit:
+            fail(f"Source changed or exceeded size limit: {path}")
+        return contents
+    finally:
+        os.close(fd)
+
+
+def wallpaper_from_sources(home, folder, settings, colors):
+    # First preference: the actual end-4 setting, when available.
+    match = re.search(r'(?m)^\s*property\s+string\s+background_wallpaperPath:\s*("(?:\\.|[^"\\])*")', settings)
+    candidate = None
+    if match:
+        import json
+        candidate = json.loads(match.group(1))
+    if not candidate:
+        lines = colors.splitlines()
+        if len(lines) > 4 and lines[4].lstrip().startswith("//"):
+            candidate = lines[4].split("//", 1)[1].strip()
+    if candidate:
+        if candidate.startswith("~/"):
+            candidate = str(home / candidate[2:])
+        path = Path(candidate)
+        return path if path.is_absolute() else folder / path
+    backgrounds = sorted(p for p in folder.glob("background.*") if p.suffix.lower().lstrip(".") in EXTENSIONS)
+    if backgrounds:
+        return backgrounds[0]
+    fail("Could not determine wallpaper (Settings.qml, Colors.qml, or background.*).")
+
+
+def checked_directory(path):
+    info = os.lstat(path)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        fail(f"Destination must be a root-owned, non-writable directory: {path}")
+
+
+def atomic_write(path, data):
+    directory = path.parent
+    checked_directory(directory)
+    fd, temporary = tempfile.mkstemp(prefix=".ii-sddm-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def replace_background(conf, name, video):
+    if not re.search(r'(?m)^Background="[^"\r\n]*"[ \t]*$', conf):
+        fail("Missing Background setting in ii-sddm.conf")
+    if not re.search(r'(?m)^BackgroundPlaceholder="[^"\r\n]*"[ \t]*$', conf):
+        fail("Missing BackgroundPlaceholder setting in ii-sddm.conf")
+    conf = re.sub(r'(?m)^Background="[^"\r\n]*"[ \t]*$', f'Background="Backgrounds/{name}"', conf)
+    value = 'Backgrounds/placeholder.png' if video else ''
+    return re.sub(r'(?m)^BackgroundPlaceholder="[^"\r\n]*"[ \t]*$', f'BackgroundPlaceholder="{value}"', conf)
+
+
+def main():
+    if len(sys.argv) != 1:
+        fail("This privileged helper accepts no arguments.")
+    uid, home = caller()
+    folder = home / ".config/ii-sddm-theme"
+
+    colors = read_owned(folder / "Colors.qml", uid, MAX_CONFIG_BYTES)
+    settings = read_owned(folder / "Settings.qml", uid, MAX_CONFIG_BYTES)
+    conf = read_owned(folder / "ii-sddm.conf", uid, MAX_CONFIG_BYTES)
+    path = wallpaper_from_sources(home, folder, settings.decode("utf-8"), colors.decode("utf-8"))
+    ext = path.suffix.lower().lstrip(".")
+    if ext not in EXTENSIONS:
+        fail(f"Unsupported wallpaper extension: {ext}")
+    # Verify ownership on the already-opened inode. Symlinks cannot be used to
+    # extract root-owned files, even if the path changes between checks.
+    wallpaper = read_owned(path, uid, MAX_WALLPAPER_BYTES, nofollow=False)
+    video = ext in VIDEOS
+    placeholder = read_owned(folder / "placeholder.png", uid, MAX_CONFIG_BYTES * 8) if video else None
+    updated_conf = replace_background(conf.decode("utf-8"), "background." + ext, video)
+
+    for directory in [Path("/usr/share"), Path("/usr/share/sddm"),
+                      Path("/usr/share/sddm/themes"), DEST,
+                      DEST / "Components", DEST / "Backgrounds", DEST / "Themes"]:
+        checked_directory(directory)
+
+    atomic_write(DEST / "Components/Colors.qml", colors)
+    atomic_write(DEST / "Components/Settings.qml", settings)
+    atomic_write(DEST / "Themes/ii-sddm.conf", updated_conf.encode("utf-8"))
+    atomic_write(DEST / "Backgrounds" / ("background." + ext), wallpaper)
+    if video:
+        atomic_write(DEST / "Backgrounds/placeholder.png", placeholder)
+    print(f"ii-sddm-theme synchronized: background.{ext}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, UnicodeError, ValueError, RuntimeError) as error:
+        print(f"ii-sddm-theme: {error}", file=sys.stderr)
+        sys.exit(1)

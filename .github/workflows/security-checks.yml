@@ -1,0 +1,28 @@
+name: Theme security checks
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check bash syntax
+        run: |
+          bash -n setup.sh uninstall.sh check.sh
+          bash -n secure-sync/sddm-theme-apply.sh
+          for script in iiMatugen/sddm-theme-apply.sh Matugen/sddm-theme-apply.sh noMatugen/sddm-theme-apply.sh; do
+            bash -n "$script"
+          done
+      - name: Check Python syntax
+        run: python3 -m compileall -q secure-sync iiMatugen/generate_settings.py
+      - name: Run unprivileged unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Reject old unsafe privilege rule
+        run: |
+          if grep -nE 'NOPASSWD:.*(/\.config/|sddm-theme-apply\.sh)' setup.sh; then
+            echo "Unsafe sudoers rule detected"
+            exit 1
+          fi

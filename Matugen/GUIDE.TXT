@@ -6,10 +6,10 @@ You can modify the theme's settings directly from the `Settings.qml` file locate
 
 ### Applying SDDM Theme Settings (Standalone):
 
-To apply only the SDDM theme settings, you can execute the `sddm-theme-apply.sh` script with superuser privileges:
+To apply only the SDDM theme settings, you can execute the `sddm-theme-apply.sh` script as your regular user:
 
 ```bash
-sudo ~/.config/ii-sddm-theme/sddm-theme-apply.sh
+~/.config/ii-sddm-theme/sddm-theme-apply.sh
 ```
 
 ### Advanced SDDM Configurations:

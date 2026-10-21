@@ -16,6 +16,7 @@ readonly APPLY_SCRIPT="${HYPR_THEME_SCRIPTS_DEST}/sddm-theme-apply.sh"
 readonly SUDOERS_FILE="/etc/sudoers.d/sddm-theme-${USERNAME}"
 
 readonly FONTS_DIR="/usr/share/fonts/ii-sddm-theme-fonts"
+readonly SYNC_HELPER="/usr/local/libexec/ii-sddm-theme-sync"
 
 # === COLORS ===
 
@@ -181,21 +182,29 @@ check_matugen_conf() {
 }
 
 check_sudoers() {
-    log_step "Sudoers"
+    log_step "Restricted synchronization helper"
 
-    if sudo test -f "${SUDOERS_FILE}"; then
-        log_ok "Sudoers rule exists: ${SUDOERS_FILE}"
+    if [[ -f "${SYNC_HELPER}" && -x "${SYNC_HELPER}" ]]; then
+        log_ok "Root-owned helper present"
     else
-        log_warn "Sudoers rule missing: ${SUDOERS_FILE} (only required for matugen integrations)"
+        log_fail "Sync helper missing: ${SYNC_HELPER}"
+    fi
+    if [[ "$(stat -c '%u:%a' "${SYNC_HELPER}" 2>/dev/null)" == "0:755" ]]; then
+        log_ok "Helper owned by root and not user-writable"
+    else
+        log_fail "Helper ownership or permissions are unsafe"
+    fi
+    if ! sudo -n test -f "${SUDOERS_FILE}" 2>/dev/null; then
+        log_warn "Could not inspect sudoers policy without sudo authentication"
         return
     fi
-
-    if sudo visudo -c -f "${SUDOERS_FILE}" >/dev/null 2>&1; then
-        log_ok "Sudoers rule is valid"
+    if sudo -n grep -Fq 'NOPASSWD: /usr/local/libexec/ii-sddm-theme-sync ""' "${SUDOERS_FILE}"; then
+        log_ok "sudoers allows only the fixed helper without arguments"
     else
-        log_fail "Sudoers rule failed validation"
+        log_fail "sudoers policy does not match the restricted helper"
     fi
 }
+
 
 check_sddm_service() {
     log_step "SDDM service"

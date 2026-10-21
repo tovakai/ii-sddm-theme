@@ -41,7 +41,7 @@ log_step() { printf "\n-- %s\n" "$*"; }
 check_dependencies() {
     log_step "Dependencies"
 
-    local pkgs=(sddm qt6-svg qt6-virtualkeyboard qt6-multimedia-ffmpeg)
+    local pkgs=(python sddm qt6-svg qt6-virtualkeyboard qt6-multimedia-ffmpeg)
     for pkg in "${pkgs[@]}"; do
         if pacman -Q "${pkg}" >/dev/null 2>&1; then
             log_ok "${pkg} installed"

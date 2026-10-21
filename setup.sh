@@ -14,10 +14,10 @@ readonly SDDM_THEME_CONF="${SDDM_CONF_DIR}/ii-sddm-theme.conf"
 readonly HYPR_SCRIPTS_BASE="${HOME}/.config"
 readonly HYPR_THEME_SCRIPTS_DEST="${HYPR_SCRIPTS_BASE}/${THEME_NAME}"
 
-readonly DATE=$(date +%s)
-readonly CLONE_DIR="/tmp/${THEME_NAME}-repo-${DATE}"
+readonly CLONE_DIR="$(mktemp -d -t ii-sddm-theme.XXXXXXXX)"
+trap 'rm -rf -- "${CLONE_DIR}"' EXIT
 
-readonly USERNAME="${USER}"
+readonly USERNAME="$(id -un)"
 readonly APPLY_SCRIPT="${HYPR_THEME_SCRIPTS_DEST}/sddm-theme-apply.sh"
 readonly SUDOERS_FILE="/etc/sudoers.d/sddm-theme-${USERNAME}"
 
@@ -511,17 +511,17 @@ setup_sudoers() {
         return 1
     fi
     sudo install -D -o root -g root -m 0755 "${HELPER_SOURCE}" "${HELPER_DEST}"
-    local temp_file
-    temp_file="$(mktemp)"
-    # The literal "" in sudoers means NO arguments are permitted.
-    printf '%s ALL=(root) NOPASSWD: %s ""\n' "${USERNAME}" "${HELPER_DEST}" > "${temp_file}"
-    if ! visudo -c -f "${temp_file}" >/dev/null 2>&1; then
-        rm -f "${temp_file}"
+    local policy_tmp="${SUDOERS_FILE}.tmp"
+    # .tmp is ignored by sudoers.d until it has passed visudo validation.
+    # Never validate a user-writable file and later install it as sudoers.
+    sudo install -o root -g root -m 0440 /dev/null "${policy_tmp}"
+    printf '%s ALL=(root) NOPASSWD: %s ""\n' "${USERNAME}" "${HELPER_DEST}" | sudo tee "${policy_tmp}" >/dev/null
+    if ! sudo visudo -c -f "${policy_tmp}" >/dev/null 2>&1; then
+        sudo rm -f "${policy_tmp}"
         log_error "Generated sudoers policy is invalid."
         return 1
     fi
-    sudo install -D -o root -g root -m 0440 "${temp_file}" "${SUDOERS_FILE}"
-    rm -f "${temp_file}"
+    sudo mv -f "${policy_tmp}" "${SUDOERS_FILE}"
     log_ok "Only ${HELPER_DEST} (without arguments) can run passwordlessly."
 }
 

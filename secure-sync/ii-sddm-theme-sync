@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Narrowly scoped, root-owned ii-sddm-theme asset copier.
 
 This is the ONLY program permitted by the passwordless sudo rule.
